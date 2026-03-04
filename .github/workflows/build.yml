@@ -1,0 +1,85 @@
+name: Build ImmortalWrt for Xiaomi CR880x (IPQ5000)
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  TZ: Asia/Shanghai
+  REPO_URL: https://github.com/kmiit/Redmi_AX3000_immortalwrt
+  REPO_BRANCH: redmi_ax3000-24.10
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/*
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential clang flex g++ gawk gcc-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev coccinelle pahole
+
+      - name: Clone source code
+        run: |
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH immortalwrt
+          cd immortalwrt
+          git submodule update --init
+
+      - name: Prepare UA3F package
+        run: |
+          cd immortalwrt
+          mkdir -p package/UA3F
+          git clone https://github.com/SunBK201/UA3F.git package/UA3F/openwrt
+
+      - name: Copy configuration file
+        run: |
+          cp $CONFIG_FILE immortalwrt/.config
+
+      - name: Update feeds
+        run: |
+          cd immortalwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build firmware
+        env:
+          MAKEFLAGS: "-j$(nproc)"
+        run: |
+          cd immortalwrt
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Prepare output
+        run: |
+          mkdir -p output
+          cd immortalwrt
+          find . -name "*.squashfs-factory*.bin" -o -name "*.squashfs-sysupgrade*.bin" -o -name "*.ubi" | head -20 | xargs -I {} cp {} ../output/
+          ls -la ../output/
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-cr880x-firmware
+          path: output/
+          retention-days: 7
+
+      - name: Upload artifact on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-build-failure-logs
+          path: |
+            immortalwrt/logs/
+            immortalwrt/.config*
+          retention-days: 7
